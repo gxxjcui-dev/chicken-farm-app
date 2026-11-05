@@ -72,4 +72,65 @@ model FeedRecord {
 model MortalityRecord {
   id         Int      @id @default(autoincrement())
   batchId    Int? @map("batchid")
-  batch      Batch?   @relation(fields: [batchId],fix: add @map annotations for lowercase column names
+  batch      Batch?   @relation(fields: [batchId], references: [id])
+  recordDate DateTime @db.Date @map("recorddate")
+  count      Int
+  reason     String? // 疾病/压死/弱雏/不明
+  symptoms   String? // 症状描述（AI 辅助诊断依据）
+  treatment  String? // 已采取措施
+  createdAt  DateTime @default(now()) @map("createdat")
+
+  @@index([batchId, recordDate])
+  @@map("mortality_records")
+}
+
+// 5. 体重抽检表
+model WeightRecord {
+  id          Int      @id @default(autoincrement())
+  batchId     Int? @map("batchid")
+  batch       Batch?   @relation(fields: [batchId], references: [id])
+  recordDate  DateTime @db.Date @map("recorddate")
+  sampleCount Int? @map("samplecount") // 抽样数量
+  avgWeightG  Float? @map("avgweightg") // 平均体重 g
+  uniformity  String? // 均匀度：好/一般/差
+  note        String?
+  createdAt   DateTime @default(now()) @map("createdat")
+
+  @@index([batchId, recordDate])
+  @@map("weight_records")
+}
+
+// 6. 免疫用药记录表
+model HealthRecord {
+  id          Int      @id @default(autoincrement())
+  batchId     Int? @map("batchid")
+  batch       Batch?   @relation(fields: [batchId], references: [id])
+  recordDate  DateTime @db.Date @map("recorddate")
+  type        String // vaccine=免疫/medicine=用药/disinfection=消毒
+  productName String? @map("productname") // 疫苗/药品名称
+  dosage      String? // 剂量
+  method      String? // 方式：饮水/滴鼻/喷雾/拌料
+  operator    String? // 操作人
+  note        String?
+  createdAt   DateTime @default(now()) @map("createdat")
+
+  @@map("health_records")
+}
+
+// 7. 告警表
+model Alert {
+  id          Int       @id @default(autoincrement())
+  batchId     Int? @map("batchid")
+  batch       Batch?    @relation(fields: [batchId], references: [id])
+  alertTime   DateTime  @default(now()) @map("alerttime")
+  level       String // urgent=紧急/warning=预警/info=提示
+  type        String // temperature/humidity/mortality/feed/weight/vaccine
+  content     String?
+  status      String    @default("open") // open=未处理/resolved=已处理
+  resolvedBy  String? @map("resolvedby")
+  resolvedAt  DateTime? @map("resolvedat")
+  resolveNote String? @map("resolvenote")
+
+  @@index([status])
+  @@map("alerts")
+} 
