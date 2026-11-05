@@ -1,0 +1,137 @@
+// 鸡棚 AI 监管系统 - Prisma Schema
+// 表结构依据 docs/02_数据库设计.md（7 张表）
+//
+// 【Vercel 部署】使用 PostgreSQL：DATABASE_URL="postgresql://user:password@host:5432/chicken_farm?schema=public"
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 1. 批次表
+model Batch {
+  id            Int      @id @default(autoincrement())
+  name          String // 批次名称，如 "2026-01批"
+  houseNo       String? // 棚号
+  breed         String? // 品种（如 AA+、ROSS 308）
+  startDate     DateTime @db.Date // 进雏日期（日龄由此推算）
+  initialCount  Int // 进雏数量
+  currentCount  Int? // 当前存栏（随死淘更新）
+  status        String   @default("active") // active=在养 / finished=已出栏
+  note          String?
+  createdAt     DateTime @default(now())
+
+  envRecords       EnvRecord[]
+  feedRecords      FeedRecord[]
+  mortalityRecords MortalityRecord[]
+  weightRecords    WeightRecord[]
+  healthRecords    HealthRecord[]
+  alerts           Alert[]
+
+  @@map("batches")
+}
+
+// 2. 环境记录表
+model EnvRecord {
+  id          Int      @id @default(autoincrement())
+  batchId     Int?
+  batch       Batch?   @relation(fields: [batchId], references: [id])
+  recordDate  DateTime @db.Date
+  period      String // morning/noon/evening（早/中/晚）
+  temperature Float? // °C
+  humidity    Float? // %
+  ammonia     Float? // 氨气 ppm（可选）
+  recorder    String?
+  note        String?
+  createdAt   DateTime @default(now())
+
+  @@index([batchId, recordDate])
+  @@map("env_records")
+}
+
+// 3. 饲喂记录表
+model FeedRecord {
+  id         Int      @id @default(autoincrement())
+  batchId    Int?
+  batch      Batch?   @relation(fields: [batchId], references: [id])
+  recordDate DateTime @db.Date
+  feedKg     Float? // 采食量 kg
+  waterL     Float? // 饮水量 L
+  feedType   String? // 育雏料/中期料/后期料
+  note       String?
+  createdAt  DateTime @default(now())
+
+  @@index([batchId, recordDate])
+  @@map("feed_records")
+}
+
+// 4. 死淘记录表
+model MortalityRecord {
+  id         Int      @id @default(autoincrement())
+  batchId    Int?
+  batch      Batch?   @relation(fields: [batchId], references: [id])
+  recordDate DateTime @db.Date
+  count      Int
+  reason     String? // 疾病/压死/弱雏/不明
+  symptoms   String? // 症状描述（AI 辅助诊断依据）
+  treatment  String? // 已采取措施
+  createdAt  DateTime @default(now())
+
+  @@index([batchId, recordDate])
+  @@map("mortality_records")
+}
+
+// 5. 体重抽检表
+model WeightRecord {
+  id          Int      @id @default(autoincrement())
+  batchId     Int?
+  batch       Batch?   @relation(fields: [batchId], references: [id])
+  recordDate  DateTime @db.Date
+  sampleCount Int? // 抽样数量
+  avgWeightG  Float? // 平均体重 g
+  uniformity  String? // 均匀度：好/一般/差
+  note        String?
+  createdAt   DateTime @default(now())
+
+  @@index([batchId, recordDate])
+  @@map("weight_records")
+}
+
+// 6. 免疫用药记录表
+model HealthRecord {
+  id          Int      @id @default(autoincrement())
+  batchId     Int?
+  batch       Batch?   @relation(fields: [batchId], references: [id])
+  recordDate  DateTime @db.Date
+  type        String // vaccine=免疫/medicine=用药/disinfection=消毒
+  productName String? // 疫苗/药品名称
+  dosage      String? // 剂量
+  method      String? // 方式：饮水/滴鼻/喷雾/拌料
+  operator    String? // 操作人
+  note        String?
+  createdAt   DateTime @default(now())
+
+  @@map("health_records")
+}
+
+// 7. 告警表
+model Alert {
+  id          Int       @id @default(autoincrement())
+  batchId     Int?
+  batch       Batch?    @relation(fields: [batchId], references: [id])
+  alertTime   DateTime  @default(now())
+  level       String // urgent=紧急/warning=预警/info=提示
+  type        String // temperature/humidity/mortality/feed/weight/vaccine
+  content     String?
+  status      String    @default("open") // open=未处理/resolved=已处理
+  resolvedBy  String?
+  resolvedAt  DateTime?
+  resolveNote String?
+
+  @@index([status])
+  @@map("alerts")
+}
