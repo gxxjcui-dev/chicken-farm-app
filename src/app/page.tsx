@@ -26,6 +26,17 @@ export default async function DashboardPage() {
   const activeBatches = await prisma.batch.findMany({
     where: { status: "active" },
     orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      houseNo: true,
+      breed: true,
+      startDate: true,
+      initialCount: true,
+      currentCount: true,
+      status: true,
+      createdAt: true,
+    },
   });
 
   // 今日各时段录入完成状态（按批次）
@@ -35,7 +46,7 @@ export default async function DashboardPage() {
   });
   const envDoneMap = new Map<number, Set<string>>();
   for (const r of todayEnv) {
-    if (r.batchId == null) continue;
+    if (r.batchId == null || r.period == null) continue;
     if (!envDoneMap.has(r.batchId)) envDoneMap.set(r.batchId, new Set());
     envDoneMap.get(r.batchId)!.add(r.period);
   }
@@ -83,7 +94,17 @@ export default async function DashboardPage() {
   // 未处理告警
   const openAlerts = await prisma.alert.findMany({
     where: { status: "open" },
-    include: { batch: { select: { name: true } } },
+    select: {
+      id: true,
+      batchId: true,
+      type: true,
+      level: true,
+      content: true,
+      status: true,
+      alertTime: true,
+      resolvedAt: true,
+      batch: { select: { name: true } },
+    },
     orderBy: { alertTime: "desc" },
     take: 20,
   });
@@ -191,7 +212,7 @@ export default async function DashboardPage() {
                   <div className="flex items-center justify-between">
                     <span className="font-semibold">{lv.label}</span>
                     <span className="text-xs opacity-70">
-                      {new Date(a.alertTime).toLocaleString("zh-CN", { hour12: false })}
+                      {a.alertTime ? new Date(a.alertTime).toLocaleString("zh-CN", { hour12: false }) : ""}
                     </span>
                   </div>
                   <p className="mt-1">{a.content}</p>

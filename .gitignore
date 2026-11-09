@@ -5,3 +5,25 @@ prisma/dev.db
 prisma/dev.db-journal
 *.tsbuildinfo
 next-env.d.ts
+# 敏感与本地临时
+.env
+tmp.env
+# 一次性验证脚本与备份（保留本地，不进仓库）
+*.backup_*
+check_schema.sql
+export_schema.sql
+backfill_batch_meta.sql
+align_schema.sql
+create_view_and_snapshot.sql
+update_check_constraints.sql
+update_views_d4.sql
+quick_test.sql
+migration_trigger.sql
+_verify_v11.js
+_verify_rls.sql
+test-db-connection.js
+test_v2_queries.js
+test-tables.ts
+check_data.js
+migration_test.js
+prisma/schema.prisma.backup*

@@ -1,7 +1,5 @@
-// 鸡棚 AI 监管系统 - Prisma Schema
-// 表结构依据 docs/02_数据库设计.md（7 张表）
-//
-// 【Vercel 部署】使用 PostgreSQL：DATABASE_URL="postgresql://user:password@host:5432/chicken_farm?schema=public"
+// This is your Prisma schema file,
+// learn more about the docs: https://pris.ly/d/prisma-schema
 
 generator client {
   provider = "prisma-client-js"
@@ -12,126 +10,477 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// 1. 批次表
+// ============================================
+// V2.0-R1.2-SP3 第一阶段
+// 核心理念：记录→模仿→边界修正
+// 红线：禁止自动比较、自动告警、自动融合参数
+// ============================================
+// 2026-11-08 v1.1：全部模型已按 Supabase 真实库逐字段对齐
+// （类型精度 @db 注解、索引 map 对齐手工命名、FK 显式 NoAction/Restrict），
+// 目标：migrate diff --from-url <db> --to-schema-datamodel 输出为空。
+
+// 批次表（V1保留，V2继续使用）
 model Batch {
   id            Int      @id @default(autoincrement())
-  name          String // 批次名称，如 "2026-01批"
-  houseNo       String? // 棚号
-  breed         String? // 品种（如 AA+、ROSS 308）
-  startDate     DateTime @db.Date // 进雏日期（日龄由此推算）
-  initialCount  Int // 进雏数量
-  currentCount  Int? // 当前存栏（随死淘更新）
-  status        String   @default("active") // active=在养 / finished=已出栏
+  name          String   @db.VarChar(255) // 展示名，允许重复（2026-11-08 决策2：撤销 UNIQUE）
+  houseNo       String?  @map("houseno") @db.VarChar(100)
+  breed         String?  @db.VarChar(100) // 品种
+  startDate     DateTime @db.Date @map("startdate")
+  initialCount  Int      @map("initialcount")
+  currentCount  Int?     @map("currentcount")
+  status        String   @default("active") @db.VarChar(50) // active/finished
   note          String?
-  createdAt     DateTime @default(now())
 
-  envRecords       EnvRecord[]
-  feedRecords      FeedRecord[]
+  // V1关联关系（保留）
+  dailyRecords  DailyRecord[]
+  envRecords    EnvRecord[]
+  feedRecords   FeedRecord[]
   mortalityRecords MortalityRecord[]
-  weightRecords    WeightRecord[]
-  healthRecords    HealthRecord[]
-  alerts           Alert[]
+  weightRecords WeightRecord[]
+  healthRecords HealthRecord[]
+  alerts        Alert[]
+
+  // V2关联关系（新增）
+  environmentReadings EnvironmentReading[]
+  equipmentLogs     EquipmentOperationLog[]
+  managerDecisions  ManagerDecisionLog[]
+  healthEvents      HealthMedicationEvent[]
+  conflictLogs      KnowledgeConflictLog[]
+
+  createdAt     DateTime @default(now()) @map("createdat") @db.Timestamp(6)
 
   @@map("batches")
 }
 
-// 2. 环境记录表
-model EnvRecord {
-  id          Int      @id @default(autoincrement())
-  batchId     Int?
-  batch       Batch?   @relation(fields: [batchId], references: [id])
-  recordDate  DateTime @db.Date
-  period      String // morning/noon/evening（早/中/晚）
-  temperature Float? // °C
-  humidity    Float? // %
-  ammonia     Float? // 氨气 ppm（可选）
-  recorder    String?
-  note        String?
-  createdAt   DateTime @default(now())
+// ============================================
+// 业务表1：DailyRecord【改造】
+// ============================================
+model DailyRecord {
+  id                Int      @id @default(autoincrement())
+  batchId           Int      @map("batch_id")
+  recordDate        DateTime @db.Date @map("record_date")
+  dayAge            Int      @map("day_age")
 
-  @@index([batchId, recordDate])
+  // 存栏数据（新增）
+  startCount        Int?     @map("start_count") // 期初存栏
+  transferInNum     Int?     @map("transfer_in_num") // 转入数量
+  outTransferNum    Int?     @map("out_transfer_num") // 转出数量
+  endCount          Int?     @map("end_count") // 期末存栏
+
+  // 死淘数据（新增，聚合来自HealthMedicationEvent）
+  deadNum           Int?     @map("dead_num") // 死亡数
+  eliminateNum      Int?     @map("eliminate_num") // 淘汰数
+
+  // 采食饮水（重命名）
+  feedConsume       Decimal? @db.Decimal(10, 2) @map("feed_consume") // 采食量(kg)
+  waterConsume      Decimal? @db.Decimal(10, 2) @map("water_consume") // 饮水量(L)
+
+  // 数据来源标记（新增）
+  calcSource        String?  @map("calc_source") @db.VarChar(50) // auto_aggregate / manual_corrected
+  refSource         String?  @map("ref_source") @db.VarChar(100) // 参考来源
+
+  // 分层温差（新增，仅多层有效测点才可计算）
+  layerThermalDiff  Decimal? @db.Decimal(4, 2) @map("layer_thermal_diff")
+
+  // 冲突状态（新增）
+  dailyConflictStatus Json?  @map("daily_conflict_status") @db.JsonB // JSON格式
+
+  // 人工备注
+  humanNote         String?  @map("human_note")
+
+  // 关联关系（GPT方案：关联Batch.id，不关联DailyRecord）
+  batch             Batch?   @relation(fields: [batchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  // 软删除
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  // GPT方案：批次+日期唯一约束
+  @@unique([batchId, recordDate], map: "uk_daily_records_batch_date")
+  @@index([batchId, recordDate], map: "idx_daily_records_batch_date")
+  @@map("daily_records")
+}
+
+// ============================================
+// 业务表2：EnvironmentReading【新建，多测点环境读数】
+// ============================================
+model EnvironmentReading {
+  id                BigInt   @id @default(autoincrement())
+  batchId           Int      @map("batch_id")
+  readTime          DateTime @map("read_time") @db.Timestamp(6)
+  probeId           String   @map("probe_id") @db.VarChar(50) // 探头编号
+  cageColumn        String?  @map("cage_column") @db.VarChar(50) // 笼列
+  cageLayer         String?  @map("cage_layer") @db.VarChar(20) // 笼层：上/中/下
+  positionDesc      String   @map("position_desc") @db.VarChar(200) // 必须记录测点位置
+  temp              Decimal? @db.Decimal(4, 2)
+  humidity          Decimal? @db.Decimal(4, 2)
+  dataSource        String?  @map("data_source") @db.VarChar(20) // sensor / manual
+
+  // 关联关系（GPT方案：关联Batch.id，不关联DailyRecord）
+  batch             Batch    @relation(fields: [batchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  // 软删除
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@index([batchId, readTime], map: "idx_environment_readings_batch_time")
+  @@index([batchId, cageLayer, readTime], map: "idx_environment_readings_batch_layer_time")
+  @@index([probeId, readTime], map: "idx_environment_readings_probe_time")
+  @@map("environment_readings")
+}
+
+// ============================================
+// 业务表3：EquipmentOperationLog【新建设备事件】
+// ============================================
+model EquipmentOperationLog {
+  id                BigInt   @id @default(autoincrement())
+  batchId           Int      @map("batch_id")
+  operateTime       DateTime @map("operate_time") @db.Timestamp(6)
+  deviceType        String   @map("device_type") @db.VarChar(20) // fan / water_curtain
+  deviceNo          String   @map("device_no") @db.VarChar(50)
+  operateAction     String   @map("operate_action") @db.VarChar(20) // start / stop / set_param
+  statusBefore      String?  @map("status_before") @db.VarChar(50)
+  statusAfter       String?  @map("status_after") @db.VarChar(50)
+  controllerSetValue String? @map("controller_set_value") @db.VarChar(100)
+  operateType       String?  @map("operate_type") @db.VarChar(20) // auto / manual
+  systemAutoSuggest String   @default("") @map("system_auto_suggest") @db.VarChar(200) // 第一阶段恒为空
+  operatorNote      String?  @map("operator_note")
+  operator          String?  @db.VarChar(50)
+
+  // 关联关系（GPT方案：关联Batch.id，不关联DailyRecord）
+  batch             Batch    @relation(fields: [batchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  // 软删除
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@index([batchId, operateTime], map: "idx_equipment_operation_logs_batch_time")
+  @@index([deviceType, deviceNo, operateTime], map: "idx_equipment_operation_logs_device_time")
+  @@map("equipment_operation_logs")
+}
+
+// ============================================
+// 业务表4：ManagerDecisionLog【厂长决策核心表】
+// ============================================
+model ManagerDecisionLog {
+  id                BigInt   @id @default(autoincrement())
+  batchId           Int      @map("batch_id")
+  decisionTime      DateTime @map("decision_time") @db.Timestamp(6)
+  recordDate        DateTime? @db.Date @map("record_date") // 用于按日分组，不做强外键绑定
+  dayAge            Int      @map("day_age")
+  envSnapshotJson   Json?    @map("env_snapshot_json") @db.JsonB // 环境快照
+  managerTargetJson Json?    @map("manager_target_json") @db.JsonB // 厂长目标
+  actualOperation   String?  @map("actual_operation") // 实际操作
+  operationReason   String?  @map("operation_reason") // 操作原因
+  consultOther      String?  @map("consult_other") @db.VarChar(200) // 咨询他人（仅人工录入）
+  envAfterChange    String?  @map("env_after_change") // 调整后环境
+  chickenPerformance String? @map("chicken_performance") // 鸡群表现
+  decisionMaker     String   @map("decision_maker") @db.VarChar(50)
+  manualRecordConflict Boolean @default(false) @map("manual_record_conflict") // true才联动写入冲突日志
+
+  // 关联关系（GPT方案：关联Batch.id，不关联DailyRecord）
+  batch             Batch    @relation(fields: [batchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  conflictLogs      KnowledgeConflictLog[]
+
+  // 软删除
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@index([batchId, decisionTime], map: "idx_manager_decision_logs_batch_time")
+  @@index([batchId, dayAge], map: "idx_manager_decision_logs_batch_age")
+  @@map("manager_decision_logs")
+}
+
+// ============================================
+// 业务表5：HealthMedicationEvent【健康事件】
+// ============================================
+model HealthMedicationEvent {
+  id                BigInt   @id @default(autoincrement())
+  batchId           Int      @map("batch_id")
+  eventTime         DateTime @map("event_time") @db.Timestamp(6) // 事件真实发生时间
+  recordTime        DateTime @map("record_time") @db.Timestamp(6) // 录入系统时间
+  eventType         String   @map("event_type") @db.VarChar(20) // dead / eliminate / vaccine / medicine
+  eventCount        Int?     @map("event_count")
+  disposalDesc      String?  @map("disposal_desc") // 处置描述
+  vetOpinion        String?  @map("vet_opinion") // 兽医意见（人工录入）
+  recorder          String?  @db.VarChar(50)
+
+  // 关联关系（GPT方案：关联Batch.id，不关联DailyRecord）
+  batch             Batch    @relation(fields: [batchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  // 软删除
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@index([batchId, eventTime], map: "idx_health_medication_events_batch_time")
+  @@index([batchId, eventType, eventTime], map: "idx_health_medication_events_batch_type_time")
+  @@map("health_medication_events")
+}
+
+// ============================================
+// 业务表6：BatchMeta【批次元数据】
+// ============================================
+model BatchMeta {
+  id                BigInt   @id @default(autoincrement())
+  batchId           BigInt   @unique @map("batch_id") // bigint→integer 类型对齐+FK 属 D3，暂缓执行
+  chickenHouseNo    String?  @map("chicken_house_no") @db.VarChar(50)
+  inChickDate       DateTime? @db.Date @map("in_chick_date")
+  strainInfo        String?  @map("strain_info") @db.VarChar(200) // 品种/品系
+  chickSource       String?  @map("chick_source") @db.VarChar(200) // 鸡苗来源
+  batchNote         String?  @map("batch_note") // 禁止程序自动改写
+  parseNoteTemp     String?  @map("parse_note_temp") // 预留，第一阶段禁止程序自动写入
+  isValidReference  Boolean  @default(false) @map("is_valid_reference") // 成功批次打标
+  markUser          String?  @map("mark_user") @db.VarChar(50)
+  markTime          DateTime? @map("mark_time") @db.Timestamp(6)
+
+  // 软删除
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@index([chickenHouseNo, inChickDate], map: "idx_batch_meta_house_date")
+  @@index([isValidReference], map: "idx_batch_meta_valid_reference")
+  @@map("batch_meta")
+}
+
+// ============================================
+// 业务表7：KnowledgeConflictLog【冲突日志】
+// ============================================
+model KnowledgeConflictLog {
+  id                BigInt   @id @default(autoincrement())
+  managerDecisionId BigInt   @map("manager_decision_id") // GPT方案：关联ManagerDecisionLog.id
+  batchId           Int      @map("batch_id") // 保留用于查询
+  recordDate        DateTime @db.Date @map("record_date") // 保留用于查询
+  conflictItem      String   @map("conflict_item") @db.VarChar(200)
+  authorityValueJson Json?   @map("authority_value_json") @db.JsonB // 参考值+KB-ID
+  humanSetValueJson Json?    @map("human_set_value_json") @db.JsonB // 人工设定值
+  riskPrompt        String?  @map("risk_prompt")
+  isConfirm         Int      @default(0) @map("is_confirm") // 0未确认/1确认
+
+  // 关联关系（GPT方案：关联ManagerDecisionLog.id）
+  managerDecision   ManagerDecisionLog @relation(fields: [managerDecisionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  batch             Batch    @relation(fields: [batchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  // 软删除
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@index([batchId, recordDate], map: "idx_knowledge_conflict_logs_batch_date")
+  @@index([managerDecisionId], map: "idx_knowledge_conflict_logs_manager_decision")
+  @@index([isConfirm], map: "idx_knowledge_conflict_logs_confirm")
+  @@map("knowledge_conflict_logs")
+}
+
+// ============================================
+// 业务表8：AlertToleranceConfig【容忍配置】
+// ============================================
+model AlertToleranceConfig {
+  id                BigInt   @id @default(autoincrement())
+  configKey         String   @unique @map("config_key") @db.VarChar(100)
+  toleranceValue    Decimal? @db.Decimal(10, 2) @map("tolerance_value")
+  isEnabled         Boolean  @default(false) @map("is_enabled") // 第一阶段强制false
+  kbSnapshotVersion String?  @map("kb_snapshot_version") @db.VarChar(50)
+
+  // 软删除
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@map("alert_tolerance_configs")
+}
+
+// ============================================
+// 业务表9：TestCase【测试用例】
+// ============================================
+model TestCase {
+  id                BigInt   @id @default(autoincrement())
+  caseName          String   @map("case_name") @db.VarChar(200)
+  caseLevel         String?  @map("case_level") @db.VarChar(20) // 冒烟/单元/集成/回归
+  inputDesc         String?  @map("input_desc")
+  expectResult      String?  @map("expect_result")
+  actualResult      String?  @map("actual_result")
+  runStatus         String   @default("not_run") @map("run_status") @db.VarChar(20) // not_run/pass/fail
+  executor          String?  @db.VarChar(50)
+  executeTime       DateTime? @map("execute_time") @db.Timestamp(6)
+
+  // 软删除
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@index([caseLevel, runStatus], map: "idx_test_cases_level_status")
+  @@map("test_cases")
+}
+
+// ============================================
+// 基础设施表1：MigrationMapping【唯一映射幂等核心】
+// ============================================
+model MigrationMapping {
+  id                BigInt   @id @default(autoincrement())
+  legacySourceTable String   @map("legacy_source_table") @db.VarChar(100)
+  legacySourceId    String   @map("legacy_source_id") @db.VarChar(100)
+  targetTable       String   @map("target_table") @db.VarChar(100)
+  legacySubrecordKey String  @map("legacy_subrecord_key") @db.VarChar(100) // GPT方案：NOT NULL，业务层明确传入（一对一'default'，一对多稳定Key）
+  targetNewId       BigInt?  @map("target_new_id")
+  mappingStatus     String   @map("mapping_status") @db.VarChar(20) // success / abandoned
+
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  // 关联关系
+  migrationLogs     MigrationLog[]
+
+  @@unique([legacySourceTable, legacySourceId, targetTable, legacySubrecordKey], map: "uk_mapping")
+  @@index([targetTable, targetNewId], map: "idx_migration_mappings_target") // GPT方案：反向查询索引
+  @@index([mappingStatus], map: "idx_migration_mappings_status")
+  @@map("migration_mappings")
+}
+
+// ============================================
+// 基础设施表2：MigrationLog【迁移尝试流水】
+// ============================================
+model MigrationLog {
+  id                BigInt   @id @default(autoincrement())
+  mappingId         BigInt?  @map("mapping_id")
+  migrationBatchId  String?  @map("migration_batch_id") @db.VarChar(100)
+  attemptStatus     String   @map("attempt_status") @db.VarChar(20) // started / success / skipped / failed
+  attemptTime       DateTime @default(now()) @map("attempt_time") @db.Timestamp(6)
+  migrationError    String?  @map("migration_error")
+
+  // 关联关系
+  mapping           MigrationMapping? @relation(fields: [mappingId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@index([migrationBatchId, attemptTime], map: "idx_migration_logs_batch_time")
+  @@index([migrationBatchId, attemptStatus], map: "idx_migration_logs_batch_status") // GPT方案：可选统计索引
+  @@index([attemptStatus, attemptTime], map: "idx_migration_logs_status_time")
+  @@map("migration_logs")
+}
+
+// ============================================
+// 保留原有表（V1.0兼容）
+// 2026-11-08 v1.1：六个 V1 模型全部按数据库真实结构重写
+// （DB 为唯一权威；旧模型字段为开发期幻觉，已清除）
+// ============================================
+
+// 环境记录表（保留）
+model EnvRecord {
+  id          Int       @id @default(autoincrement())
+  batchId     Int?      @map("batchid")
+  recordDate  DateTime  @db.Date @map("recorddate")
+  period      String?   @db.VarChar(50) // morning/noon/evening
+  outdoorTemp Float?    @map("outdoortemp") // 室外温度（°C，选填）
+  temperature Float?    // 棚内温度（°C）
+  humidity    Float?
+  ammonia     Float?    // 氨气 ppm
+  recorder    String?   @db.VarChar(100)
+  note        String?
+
+  batch       Batch?    @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdAt   DateTime  @default(now()) @map("createdat") @db.Timestamp(6)
+
+  @@index([batchId, recordDate], map: "idx_env_records_batch_date")
   @@map("env_records")
 }
 
-// 3. 饲喂记录表
+// 采食记录表（保留）
 model FeedRecord {
-  id         Int      @id @default(autoincrement())
-  batchId    Int?
-  batch      Batch?   @relation(fields: [batchId], references: [id])
-  recordDate DateTime @db.Date
-  feedKg     Float? // 采食量 kg
-  waterL     Float? // 饮水量 L
-  feedType   String? // 育雏料/中期料/后期料
-  note       String?
-  createdAt  DateTime @default(now())
+  id          Int       @id @default(autoincrement())
+  batchId     Int?      @map("batchid")
+  recordDate  DateTime  @db.Date @map("recorddate")
+  feedKg      Float?    @map("feedkg")
+  waterL      Float?    @map("waterl")
+  feedType    String?   @map("feedtype") @db.VarChar(100)
+  note        String?
 
-  @@index([batchId, recordDate])
+  batch       Batch?    @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdAt   DateTime  @default(now()) @map("createdat") @db.Timestamp(6)
+
+  @@index([batchId, recordDate], map: "idx_feed_records_batch_date")
   @@map("feed_records")
 }
 
-// 4. 死淘记录表
+// 死淘记录表（保留）
 model MortalityRecord {
-  id         Int      @id @default(autoincrement())
-  batchId    Int?
-  batch      Batch?   @relation(fields: [batchId], references: [id])
-  recordDate DateTime @db.Date
-  count      Int
-  reason     String? // 疾病/压死/弱雏/不明
-  symptoms   String? // 症状描述（AI 辅助诊断依据）
-  treatment  String? // 已采取措施
-  createdAt  DateTime @default(now())
+  id          Int       @id @default(autoincrement())
+  batchId     Int?      @map("batchid")
+  recordDate  DateTime  @db.Date @map("recorddate")
+  count       Int
+  reason      String?   @db.VarChar(255)
+  symptoms    String?
+  treatment   String?
 
-  @@index([batchId, recordDate])
+  batch       Batch?    @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdAt   DateTime  @default(now()) @map("createdat") @db.Timestamp(6)
+
+  @@index([batchId, recordDate], map: "idx_mortality_records_batch_date")
   @@map("mortality_records")
 }
 
-// 5. 体重抽检表
+// 体重记录表（保留）
 model WeightRecord {
-  id          Int      @id @default(autoincrement())
-  batchId     Int?
-  batch       Batch?   @relation(fields: [batchId], references: [id])
-  recordDate  DateTime @db.Date
-  sampleCount Int? // 抽样数量
-  avgWeightG  Float? // 平均体重 g
-  uniformity  String? // 均匀度：好/一般/差
+  id          Int       @id @default(autoincrement())
+  batchId     Int?      @map("batchid")
+  recordDate  DateTime  @db.Date @map("recorddate")
+  sampleCount Int?      @map("samplecount")
+  avgWeightG  Float?    @map("avgweightg")
+  uniformity  String?   @db.VarChar(50)
   note        String?
-  createdAt   DateTime @default(now())
 
-  @@index([batchId, recordDate])
+  batch       Batch?    @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdAt   DateTime  @default(now()) @map("createdat") @db.Timestamp(6)
+
+  @@index([batchId, recordDate], map: "idx_weight_records_batch_date")
   @@map("weight_records")
 }
 
-// 6. 免疫用药记录表
+// 健康记录表（保留）
+// 注意：本表为「免疫/用药/消毒事件」语义（type/productname/dosage/method/operator），
+// 与旧模型幻觉的「疾病诊疗」语义（symptoms/treatment/medicine）不同，不做跨语义映射。
 model HealthRecord {
-  id          Int      @id @default(autoincrement())
-  batchId     Int?
-  batch       Batch?   @relation(fields: [batchId], references: [id])
-  recordDate  DateTime @db.Date
-  type        String // vaccine=免疫/medicine=用药/disinfection=消毒
-  productName String? // 疫苗/药品名称
-  dosage      String? // 剂量
-  method      String? // 方式：饮水/滴鼻/喷雾/拌料
-  operator    String? // 操作人
+  id          Int       @id @default(autoincrement())
+  batchId     Int?      @map("batchid")
+  recordDate  DateTime  @db.Date @map("recorddate")
+  type        String    @db.VarChar(100) // vaccine/medicine/disinfection
+  productName String?   @map("productname") @db.VarChar(255)
+  dosage      String?   @db.VarChar(100)
+  method      String?   @db.VarChar(100)
+  operator    String?   @db.VarChar(100)
   note        String?
-  createdAt   DateTime @default(now())
+
+  batch       Batch?    @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdAt   DateTime  @default(now()) @map("createdat") @db.Timestamp(6)
 
   @@map("health_records")
 }
 
-// 7. 告警表
+// 告警记录表（保留，2026-11-08 已对齐）
 model Alert {
   id          Int       @id @default(autoincrement())
-  batchId     Int?
-  batch       Batch?    @relation(fields: [batchId], references: [id])
-  alertTime   DateTime  @default(now())
-  level       String // urgent=紧急/warning=预警/info=提示
-  type        String // temperature/humidity/mortality/feed/weight/vaccine
+  batchId     Int?      @map("batchid")
+  alertTime   DateTime? @default(now()) @map("alerttime") @db.Timestamp(6)
+  level       String    @db.VarChar(50) // warning/urgent/info
+  type        String    @db.VarChar(100)
   content     String?
-  status      String    @default("open") // open=未处理/resolved=已处理
-  resolvedBy  String?
-  resolvedAt  DateTime?
-  resolveNote String?
+  status      String?   @default("open") @db.VarChar(50) // open/resolved
+  resolvedBy  String?   @map("resolvedby") @db.VarChar(100)
+  resolvedAt  DateTime? @map("resolvedat") @db.Timestamp(6)
+  resolveNote String?   @map("resolvenote")
 
-  @@index([status])
+  batch       Batch?    @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([status], map: "idx_alerts_status")
   @@map("alerts")
 }

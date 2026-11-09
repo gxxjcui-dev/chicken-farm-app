@@ -20,6 +20,10 @@ const TABS = [
   { key: "mortality", label: "💀 死淘" },
   { key: "weight", label: "⚖️ 体重" },
   { key: "health", label: "💉 免疫用药" },
+  { key: "reading", label: "📡 测点读数" },
+  { key: "equipment", label: "🌀 设备操作" },
+  { key: "decision", label: "📋 厂长决策" },
+  { key: "healthevent", label: "💊 健康事件" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -39,6 +43,12 @@ function todayStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function nowLocal() {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export default function RecordForms() {
   const [tab, setTab] = useState<TabKey>("env");
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -48,11 +58,16 @@ export default function RecordForms() {
   const [submitting, setSubmitting] = useState(false);
 
   // 各表单状态
-  const [env, setEnv] = useState({ period: "morning", temperature: "", humidity: "", ammonia: "", recorder: "", note: "" });
+  const [env, setEnv] = useState({ period: "morning", outdoorTemp: "", temperature: "", humidity: "", ammonia: "", recorder: "", note: "" });
   const [feed, setFeed] = useState({ feedKg: "", waterL: "", feedType: "育雏料", note: "" });
   const [mortality, setMortality] = useState({ count: "", reason: "疾病", symptoms: "", treatment: "" });
   const [weight, setWeight] = useState({ sampleCount: "", avgWeightG: "", uniformity: "好", note: "" });
   const [health, setHealth] = useState({ type: "vaccine", productName: "", dosage: "", method: "饮水", operator: "", note: "" });
+  // V2 事件表
+  const [reading, setReading] = useState({ probeId: "P1", cageLayer: "上", cageColumn: "第5列", positionDesc: "第5列上层", temp: "", humidity: "", readTime: nowLocal() });
+  const [equipment, setEquipment] = useState({ deviceType: "fan", deviceNo: "", operateAction: "start", operateType: "manual", controllerSetValue: "", operator: "", operatorNote: "", operateTime: nowLocal() });
+  const [decision, setDecision] = useState({ actualOperation: "", operationReason: "", chickenPerformance: "", envAfterChange: "", consultOther: "", decisionMaker: "厂长", decisionTime: nowLocal() });
+  const [healthevent, setHealthevent] = useState({ eventType: "dead", eventCount: "", eventTime: nowLocal(), disposalDesc: "", vetOpinion: "", recorder: "" });
 
   useEffect(() => {
     fetch("/api/batches?status=active")
@@ -86,9 +101,21 @@ export default function RecordForms() {
     } else if (tab === "weight") {
       url = "/api/records/weight";
       payload = { ...payload, ...weight };
-    } else {
+    } else if (tab === "health") {
       url = "/api/records/health";
       payload = { ...payload, ...health };
+    } else if (tab === "reading") {
+      url = "/api/v2/environment-readings";
+      payload = { ...payload, ...reading };
+    } else if (tab === "equipment") {
+      url = "/api/v2/equipment-logs";
+      payload = { ...payload, ...equipment };
+    } else if (tab === "decision") {
+      url = "/api/v2/decisions";
+      payload = { ...payload, ...decision };
+    } else {
+      url = "/api/v2/health-events";
+      payload = { ...payload, ...healthevent };
     }
 
     const res = await fetch(url, {
@@ -102,11 +129,15 @@ export default function RecordForms() {
       const alerts: AlertInfo[] = data.alerts ?? [];
       setMsg({ ok: true, text: "保存成功", alerts });
       // 清空数量类字段，方便连续录入
-      if (tab === "env") setEnv((p) => ({ ...p, temperature: "", humidity: "", ammonia: "", note: "" }));
+      if (tab === "env") setEnv((p) => ({ ...p, outdoorTemp: "", temperature: "", humidity: "", ammonia: "", note: "" }));
       if (tab === "feed") setFeed((p) => ({ ...p, feedKg: "", waterL: "", note: "" }));
       if (tab === "mortality") setMortality((p) => ({ ...p, count: "", symptoms: "", treatment: "" }));
       if (tab === "weight") setWeight((p) => ({ ...p, sampleCount: "", avgWeightG: "", note: "" }));
       if (tab === "health") setHealth((p) => ({ ...p, productName: "", dosage: "", note: "" }));
+      if (tab === "reading") setReading((p) => ({ ...p, temp: "", humidity: "", readTime: nowLocal() }));
+      if (tab === "equipment") setEquipment((p) => ({ ...p, deviceNo: "", controllerSetValue: "", operatorNote: "", operateTime: nowLocal() }));
+      if (tab === "decision") setDecision((p) => ({ ...p, actualOperation: "", operationReason: "", chickenPerformance: "", envAfterChange: "", consultOther: "", decisionTime: nowLocal() }));
+      if (tab === "healthevent") setHealthevent((p) => ({ ...p, eventCount: "", disposalDesc: "", vetOpinion: "", eventTime: nowLocal() }));
     } else {
       setMsg({ ok: false, text: data.error ?? "保存失败" });
     }
@@ -134,7 +165,7 @@ export default function RecordForms() {
       </section>
 
       {/* Tab 切换 */}
-      <div className="grid grid-cols-5 gap-1 rounded-lg bg-gray-200 p-1">
+      <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-200 p-1 sm:grid-cols-5">
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -160,7 +191,11 @@ export default function RecordForms() {
               </select>
             </div>
             <div>
-              <label className={labelCls}>温度（°C）*</label>
+              <label className={labelCls}>室外温度（°C，选填）</label>
+              <input type="number" step="0.1" className={inputCls} placeholder="如 15.0" value={env.outdoorTemp} onChange={(e) => setEnv({ ...env, outdoorTemp: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>棚内温度（°C）*</label>
               <input required type="number" step="0.1" className={inputCls} placeholder="如 28.5" value={env.temperature} onChange={(e) => setEnv({ ...env, temperature: e.target.value })} />
             </div>
             <div>
@@ -296,6 +331,161 @@ export default function RecordForms() {
             <div>
               <label className={labelCls}>备注</label>
               <input className={inputCls} value={health.note} onChange={(e) => setHealth({ ...health, note: e.target.value })} />
+            </div>
+          </div>
+        )}
+
+        {tab === "reading" && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>探头编号 *</label>
+              <select className={inputCls} value={reading.probeId} onChange={(e) => setReading({ ...reading, probeId: e.target.value })}>
+                <option value="P1">P1</option>
+                <option value="P2">P2</option>
+                <option value="P3">P3</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>测点位置 *</label>
+              <input required className={inputCls} placeholder="如 第5列上层" value={reading.positionDesc} onChange={(e) => setReading({ ...reading, positionDesc: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>笼层</label>
+              <select className={inputCls} value={reading.cageLayer} onChange={(e) => setReading({ ...reading, cageLayer: e.target.value })}>
+                <option value="上">上</option>
+                <option value="中">中</option>
+                <option value="下">下</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>笼列</label>
+              <input className={inputCls} placeholder="如 第5列" value={reading.cageColumn} onChange={(e) => setReading({ ...reading, cageColumn: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>温度（°C）</label>
+              <input type="number" step="0.1" className={inputCls} placeholder="如 28.5" value={reading.temp} onChange={(e) => setReading({ ...reading, temp: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>湿度（%）</label>
+              <input type="number" step="0.1" className={inputCls} placeholder="如 60" value={reading.humidity} onChange={(e) => setReading({ ...reading, humidity: e.target.value })} />
+            </div>
+            <div className="col-span-2">
+              <label className={labelCls}>读数时间 *</label>
+              <input required type="datetime-local" className={inputCls} value={reading.readTime} onChange={(e) => setReading({ ...reading, readTime: e.target.value })} />
+            </div>
+          </div>
+        )}
+
+        {tab === "equipment" && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>设备类型 *</label>
+              <select className={inputCls} value={equipment.deviceType} onChange={(e) => setEquipment({ ...equipment, deviceType: e.target.value })}>
+                <option value="fan">风机</option>
+                <option value="water_curtain">湿帘</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>设备编号 *</label>
+              <input required className={inputCls} placeholder="如 F01（风机 F01-F18）" value={equipment.deviceNo} onChange={(e) => setEquipment({ ...equipment, deviceNo: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>动作 *</label>
+              <select className={inputCls} value={equipment.operateAction} onChange={(e) => setEquipment({ ...equipment, operateAction: e.target.value })}>
+                <option value="start">开启</option>
+                <option value="stop">关闭</option>
+                <option value="set_param">调参</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>操作类型</label>
+              <select className={inputCls} value={equipment.operateType} onChange={(e) => setEquipment({ ...equipment, operateType: e.target.value })}>
+                <option value="manual">手动</option>
+                <option value="auto">自动</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>设定值（调参时填）</label>
+              <input className={inputCls} placeholder="如 28°C" value={equipment.controllerSetValue} onChange={(e) => setEquipment({ ...equipment, controllerSetValue: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>操作人</label>
+              <input className={inputCls} value={equipment.operator} onChange={(e) => setEquipment({ ...equipment, operator: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>备注</label>
+              <input className={inputCls} value={equipment.operatorNote} onChange={(e) => setEquipment({ ...equipment, operatorNote: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>操作时间 *</label>
+              <input required type="datetime-local" className={inputCls} value={equipment.operateTime} onChange={(e) => setEquipment({ ...equipment, operateTime: e.target.value })} />
+            </div>
+          </div>
+        )}
+
+        {tab === "decision" && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2">
+              <label className={labelCls}>实际操作 *</label>
+              <input required className={inputCls} placeholder="如 开2台上层风机、下调温控设定0.5°C" value={decision.actualOperation} onChange={(e) => setDecision({ ...decision, actualOperation: e.target.value })} />
+            </div>
+            <div className="col-span-2">
+              <label className={labelCls}>操作原因</label>
+              <textarea rows={2} className={inputCls} placeholder="为什么这样操作？（AI 学习厂长经验的关键）" value={decision.operationReason} onChange={(e) => setDecision({ ...decision, operationReason: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>鸡群表现</label>
+              <input className={inputCls} placeholder="如 分布均匀、无张嘴" value={decision.chickenPerformance} onChange={(e) => setDecision({ ...decision, chickenPerformance: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>调整后环境</label>
+              <input className={inputCls} placeholder="如 半小时后温度降1°C" value={decision.envAfterChange} onChange={(e) => setDecision({ ...decision, envAfterChange: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>咨询他人</label>
+              <input className={inputCls} placeholder="如 兽医、技术老师" value={decision.consultOther} onChange={(e) => setDecision({ ...decision, consultOther: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>决策人 *</label>
+              <input required className={inputCls} value={decision.decisionMaker} onChange={(e) => setDecision({ ...decision, decisionMaker: e.target.value })} />
+            </div>
+            <div className="col-span-2">
+              <label className={labelCls}>决策时间 *</label>
+              <input required type="datetime-local" className={inputCls} value={decision.decisionTime} onChange={(e) => setDecision({ ...decision, decisionTime: e.target.value })} />
+            </div>
+          </div>
+        )}
+
+        {tab === "healthevent" && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>事件类型 *</label>
+              <select className={inputCls} value={healthevent.eventType} onChange={(e) => setHealthevent({ ...healthevent, eventType: e.target.value })}>
+                <option value="dead">死亡</option>
+                <option value="eliminate">淘汰</option>
+                <option value="vaccine">免疫</option>
+                <option value="medicine">用药</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>数量（只/次）</label>
+              <input type="number" min={1} className={inputCls} value={healthevent.eventCount} onChange={(e) => setHealthevent({ ...healthevent, eventCount: e.target.value })} />
+            </div>
+            <div className="col-span-2">
+              <label className={labelCls}>处置描述</label>
+              <textarea rows={2} className={inputCls} placeholder="如 发现2只弱雏淘汰；全群饮用泰乐菌素" value={healthevent.disposalDesc} onChange={(e) => setHealthevent({ ...healthevent, disposalDesc: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>兽医意见</label>
+              <input className={inputCls} value={healthevent.vetOpinion} onChange={(e) => setHealthevent({ ...healthevent, vetOpinion: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>记录人</label>
+              <input className={inputCls} value={healthevent.recorder} onChange={(e) => setHealthevent({ ...healthevent, recorder: e.target.value })} />
+            </div>
+            <div className="col-span-2">
+              <label className={labelCls}>发生时间 *</label>
+              <input required type="datetime-local" className={inputCls} value={healthevent.eventTime} onChange={(e) => setHealthevent({ ...healthevent, eventTime: e.target.value })} />
             </div>
           </div>
         )}

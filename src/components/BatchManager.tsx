@@ -32,6 +32,9 @@ export default function BatchManager() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState<Batch | null>(null);
+  const [confirmName, setConfirmName] = useState("");
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [form, setForm] = useState({
     name: "",
     houseNo: "",
@@ -84,6 +87,22 @@ export default function BatchManager() {
       load();
     } else {
       setMsg({ ok: false, text: "操作失败" });
+    }
+  }
+
+  async function deleteBatch() {
+    if (!deleting || confirmName !== deleting.name) return;
+    setDeleteSubmitting(true);
+    const res = await fetch(`/api/batches/${deleting.id}`, { method: "DELETE" });
+    const data = await res.json();
+    setDeleteSubmitting(false);
+    if (res.ok) {
+      setMsg({ ok: true, text: `批次「${data.name}」已永久删除（含 ${data.deletedRecords} 条关联记录）` });
+      setDeleting(null);
+      setConfirmName("");
+      load();
+    } else {
+      setMsg({ ok: false, text: data.error ?? "删除失败" });
     }
   }
 
@@ -168,18 +187,61 @@ export default function BatchManager() {
                 )}
               </div>
               {b.note && <p className="mt-1 text-xs text-gray-400">备注：{b.note}</p>}
-              {b.status === "active" && (
+              <div className="mt-3 flex gap-2">
+                {b.status === "active" && (
+                  <button
+                    onClick={() => finishBatch(b)}
+                    className="rounded-lg border border-orange-300 bg-orange-50 px-4 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-100"
+                  >
+                    🏁 出栏
+                  </button>
+                )}
                 <button
-                  onClick={() => finishBatch(b)}
-                  className="mt-3 rounded-lg border border-orange-300 bg-orange-50 px-4 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-100"
+                  onClick={() => { setDeleting(b); setConfirmName(""); }}
+                  className="rounded-lg border border-red-300 bg-red-50 px-4 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100"
                 >
-                  🏁 出栏
+                  🗑 删除
                 </button>
-              )}
+              </div>
             </div>
           ))
         )}
       </section>
+
+      {/* 删除批次二次确认弹窗：需输入完整批次名 */}
+      {deleting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+            <h4 className="text-sm font-bold text-red-700">⚠️ 永久删除批次</h4>
+            <p className="mt-2 text-sm text-gray-700">
+              即将删除批次「<span className="font-semibold">{deleting.name}</span>」及其<strong>全部关联数据</strong>（环境/饲喂/死淘/体重/免疫记录、告警等），删除后<span className="font-semibold text-red-600">不可恢复</span>。
+            </p>
+            <p className="mt-3 text-xs text-gray-500">请输入完整批次名称「{deleting.name}」确认：</p>
+            <input
+              autoFocus
+              className="mt-1 w-full rounded-lg border border-red-300 px-3 py-2 text-sm focus:border-red-500 focus:outline-none"
+              value={confirmName}
+              onChange={(e) => setConfirmName(e.target.value)}
+              placeholder={deleting.name}
+            />
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => { setDeleting(null); setConfirmName(""); }}
+                className="flex-1 rounded-lg border border-gray-300 py-2 text-sm text-gray-600 hover:bg-gray-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={deleteBatch}
+                disabled={confirmName !== deleting.name || deleteSubmitting}
+                className="flex-1 rounded-lg bg-red-600 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-40"
+              >
+                {deleteSubmitting ? "删除中…" : "永久删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

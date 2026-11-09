@@ -7,7 +7,7 @@ import { checkEnvRecord } from "@/lib/alerts";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { batchId, recordDate, period, temperature, humidity, ammonia, recorder, note } = body;
+    const { batchId, recordDate, period, outdoorTemp, temperature, humidity, ammonia, recorder, note } = body;
     if (!batchId || !period) {
       return NextResponse.json({ error: "批次和时段为必填项" }, { status: 400 });
     }
@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
         batchId: Number(batchId),
         recordDate: parseRecordDate(recordDate),
         period: String(period),
+        outdoorTemp: outdoorTemp !== undefined && outdoorTemp !== "" ? Number(outdoorTemp) : null,
         temperature: temperature !== undefined && temperature !== "" ? Number(temperature) : null,
         humidity: humidity !== undefined && humidity !== "" ? Number(humidity) : null,
         ammonia: ammonia !== undefined && ammonia !== "" ? Number(ammonia) : null,

@@ -51,7 +51,7 @@ export async function checkEnvRecord(envRecordId: number): Promise<CreatedAlert[
   if (!rec || !rec.batch) return [];
   const alerts: CreatedAlert[] = [];
   const age = calcAgeDays(rec.batch.startDate, rec.recordDate);
-  const periodLabel = PERIOD_LABEL[rec.period] ?? rec.period;
+  const periodLabel = (rec.period ? PERIOD_LABEL[rec.period] : undefined) ?? rec.period ?? "未知";
   const dateStr = formatDate(rec.recordDate);
 
   if (rec.temperature != null) {
