@@ -483,4 +483,4 @@ model Alert {
 
   @@index([status], map: "idx_alerts_status")
   @@map("alerts")
-}
+} 
