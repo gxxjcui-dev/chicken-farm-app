@@ -30,6 +30,30 @@ const PERIOD_LABEL: Record<string, string> = {
   evening: "晚",
 };
 
+// 紧急告警即时推送到厂长微信（Server酱 Turbo）。
+// SendKey 只放环境变量 SERVERCHAN_SENDKEY（Vercel 项目环境变量 / 本地 .env），不写入仓库。
+async function pushUrgentToWechat(content: string): Promise<void> {
+  const sendkey = process.env.SERVERCHAN_SENDKEY;
+  if (!sendkey) return;
+  try {
+    const res = await fetch(`https://sctapi.ftqq.com/${sendkey}.send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        title: "🚨 鸡棚紧急告警",
+        desp: `${content}\n\n请立即到棚查看处理。`,
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      console.error("[serverchan] push failed, status:", res.status);
+    }
+  } catch (err) {
+    // 推送失败不影响录入主流程
+    console.error("[serverchan] push error:", err);
+  }
+}
+
 async function createAlert(
   batchId: number,
   level: "urgent" | "warning" | "info",
@@ -39,6 +63,9 @@ async function createAlert(
   await prisma.alert.create({
     data: { batchId, level, type, content },
   });
+  if (level === "urgent") {
+    await pushUrgentToWechat(content);
+  }
   return { level, type, content };
 }
 
