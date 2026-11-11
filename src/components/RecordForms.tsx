@@ -253,9 +253,12 @@ export default function RecordForms() {
                 <label className={labelCls}>原因</label>
                 <select className={inputCls} value={mortality.reason} onChange={(e) => setMortality({ ...mortality, reason: e.target.value })}>
                   <option value="疾病">疾病</option>
-                  <option value="压死">压死</option>
                   <option value="弱雏">弱雏</option>
-                  <option value="不明">不明</option>
+                  <option value="外伤">外伤</option>
+                  <option value="啄癖">啄癖</option>
+                  <option value="猝死">猝死</option>
+                  <option value="热应激">热应激</option>
+                  <option value="其他">其他</option>
                 </select>
               </div>
             </div>
