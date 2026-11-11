@@ -1,12 +1,11 @@
-// 告警判定逻辑（依据 docs/01_系统方案设计.md 第 3、4 节）
+// 告警判定逻辑（依据厂长实战标准 v3.0，2026-11-11 答题卡校准）
 // 所有函数在对应记录保存后由服务端调用，判定结果写入 alerts 表
 import { prisma } from "./prisma";
 import {
   getTempStandard,
+  getTempLimits,
   HUMIDITY_ALARM_LOW,
   HUMIDITY_ALARM_HIGH,
-  getHumidityTarget,
-  HUMIDITY_DEVIATION_INFO_PCT,
   calcHeatStressIndex,
   HEAT_STRESS_WARNING,
   HEAT_STRESS_URGENT,
@@ -69,7 +68,9 @@ async function createAlert(
   return { level, type, content };
 }
 
-// 环境记录告警判定：温度超告警线 → urgent；湿度 <40% 或 >75% → warning
+// 环境记录告警判定（v3.0）：
+// 温度：低于目标即 warning，低于目标2°C urgent；高温按季节动态上限（getTempLimits）
+// 湿度：硬线 <40% 或 >70% → warning（偏离目标提示已按厂长口径取消）
 export async function checkEnvRecord(envRecordId: number): Promise<CreatedAlert[]> {
   const rec = await prisma.envRecord.findUnique({
     where: { id: envRecordId },
@@ -83,13 +84,43 @@ export async function checkEnvRecord(envRecordId: number): Promise<CreatedAlert[
 
   if (rec.temperature != null) {
     const std = getTempStandard(age);
-    if (rec.temperature < std.alarmLow || rec.temperature > std.alarmHigh) {
+    const month = rec.recordDate.getMonth() + 1;
+    // 湿度联动：同记录有湿度时参与高温上限计算（湿度低10% → 上限+1°C）
+    const limits = getTempLimits(age, month, rec.humidity ?? undefined);
+    if (rec.temperature >= limits.urgentHigh) {
       alerts.push(
         await createAlert(
           rec.batch.id,
           "urgent",
           "temperature",
-          `【${rec.batch.name}】${dateStr} ${periodLabel}时段温度 ${rec.temperature}°C，超出 ${age} 日龄本场告警区间（${std.alarmLow}~${std.alarmHigh}°C，目标 ${std.target}°C；教科书参考 ${std.refLow}~${std.refHigh}°C）`
+          `【${rec.batch.name}】${dateStr} ${periodLabel}时段温度 ${rec.temperature}°C，超过 ${age} 日龄季节上限 ${limits.urgentHigh}°C（目标 ${std.target}°C，厂长标准：必须立即处理）`
+        )
+      );
+    } else if (rec.temperature <= limits.urgentLow) {
+      alerts.push(
+        await createAlert(
+          rec.batch.id,
+          "urgent",
+          "temperature",
+          `【${rec.batch.name}】${dateStr} ${periodLabel}时段温度 ${rec.temperature}°C，低于目标 ${std.target}°C 超过 2°C，有打堆风险，立即检查加温`
+        )
+      );
+    } else if (rec.temperature > limits.warnHigh) {
+      alerts.push(
+        await createAlert(
+          rec.batch.id,
+          "warning",
+          "temperature",
+          `【${rec.batch.name}】${dateStr} ${periodLabel}时段温度 ${rec.temperature}°C，接近季节上限 ${limits.urgentHigh}°C（目标 ${std.target}°C），注意通风`
+        )
+      );
+    } else if (rec.temperature < limits.warnLow) {
+      alerts.push(
+        await createAlert(
+          rec.batch.id,
+          "warning",
+          "temperature",
+          `【${rec.batch.name}】${dateStr} ${periodLabel}时段温度 ${rec.temperature}°C，低于目标 ${std.target}°C（厂长标准：低于目标即报警）`
         )
       );
     }
@@ -102,24 +133,9 @@ export async function checkEnvRecord(envRecordId: number): Promise<CreatedAlert[
           rec.batch.id,
           "warning",
           "humidity",
-          `【${rec.batch.name}】${dateStr} ${periodLabel}时段湿度 ${rec.humidity}%，超出告警范围（${HUMIDITY_ALARM_LOW}~${HUMIDITY_ALARM_HIGH}%）`
+          `【${rec.batch.name}】${dateStr} ${periodLabel}时段湿度 ${rec.humidity}%，超出本场范围（${HUMIDITY_ALARM_LOW}~${HUMIDITY_ALARM_HIGH}%）`
         )
       );
-    } else {
-      // 周龄目标湿度偏离提示（厂长标准）
-      const hTarget = getHumidityTarget(age);
-      const hDev = rec.humidity - hTarget;
-      if (Math.abs(hDev) > HUMIDITY_DEVIATION_INFO_PCT) {
-        const dir = hDev > 0 ? "偏高" : "偏低";
-        alerts.push(
-          await createAlert(
-            rec.batch.id,
-            "info",
-            "humidity",
-            `【${rec.batch.name}】${dateStr} ${periodLabel}时段湿度 ${rec.humidity}%，较 ${age} 日龄本场目标湿度 ${hTarget}% ${dir} ${Math.abs(hDev).toFixed(0)}%`
-          )
-        );
-      }
     }
   }
 
@@ -149,7 +165,8 @@ export async function checkEnvRecord(envRecordId: number): Promise<CreatedAlert[
   return alerts;
 }
 
-// 死淘记录告警判定：当日累计死淘 ÷ 当前存栏 > 1% → urgent；0.5%~1% → warning
+// 死淘记录告警判定（v3.0，厂长答题卡第6/7题）：
+// 当日累计死淘 ÷ 存栏 > 1.5‰ → urgent；1‰~1.5‰ → warning
 export async function checkMortalityRecord(mortalityRecordId: number): Promise<CreatedAlert[]> {
   const rec = await prisma.mortalityRecord.findUnique({
     where: { id: mortalityRecordId },
@@ -172,6 +189,7 @@ export async function checkMortalityRecord(mortalityRecordId: number): Promise<C
   // 分母使用扣减前的存栏（扣减后 + 本次数量）
   const baseCount = (rec.batch.currentCount ?? rec.batch.initialCount) + rec.count;
   const ratePct = baseCount > 0 ? (dailyDead / baseCount) * 100 : 0;
+  const ratePm = ratePct * 10; // 千分比
 
   if (ratePct > MORTALITY_URGENT_PCT) {
     alerts.push(
@@ -179,7 +197,7 @@ export async function checkMortalityRecord(mortalityRecordId: number): Promise<C
         rec.batch.id,
         "urgent",
         "mortality",
-        `【${rec.batch.name}】${dateStr} 当日累计死淘 ${dailyDead} 只，日死淘率 ${ratePct.toFixed(2)}%，超过 ${MORTALITY_URGENT_PCT}%（5‰）紧急线（本场正常值 0.5~1‰）`
+        `【${rec.batch.name}】${dateStr} 当日累计死淘 ${dailyDead} 只，日死淘率 ${ratePm.toFixed(2)}‰，超过 ${(MORTALITY_URGENT_PCT * 10).toFixed(1)}‰ 紧急线（本场正常值 0.5~1‰），立即排查并考虑联系兽医`
       )
     );
   } else if (ratePct > MORTALITY_WARNING_PCT) {
@@ -188,7 +206,7 @@ export async function checkMortalityRecord(mortalityRecordId: number): Promise<C
         rec.batch.id,
         "warning",
         "mortality",
-        `【${rec.batch.name}】${dateStr} 当日累计死淘 ${dailyDead} 只，日死淘率 ${ratePct.toFixed(2)}%，超过 ${MORTALITY_WARNING_PCT}%（2‰）预警线（本场正常值 0.5~1‰）`
+        `【${rec.batch.name}】${dateStr} 当日累计死淘 ${dailyDead} 只，日死淘率 ${ratePm.toFixed(2)}‰，超过 ${(MORTALITY_WARNING_PCT * 10).toFixed(1)}‰ 预警线（本场正常值 0.5~1‰）`
       )
     );
   }

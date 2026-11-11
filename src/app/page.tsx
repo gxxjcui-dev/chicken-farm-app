@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { calcAgeDays, todayStart, addDays, formatDate, startOfDay } from "@/lib/dateUtils";
-import { getTempStandard } from "@/lib/standards";
+import { getTempStandard, getTempLimits } from "@/lib/standards";
 import { TempChart, MortalityChart, TempChartPoint, MortChartPoint } from "@/components/DashboardCharts";
 
 export const dynamic = "force-dynamic";
@@ -62,9 +62,10 @@ export default async function DashboardPage() {
     let alarmHigh = 0;
     if (refBatch) {
       const age = calcAgeDays(refBatch.startDate, day);
-      const std = getTempStandard(age);
-      alarmLow = std.alarmLow;
-      alarmHigh = std.alarmHigh;
+      // v3.0：图表参考区间 = 目标温度 ~ 季节动态上限（getTempLimits）
+      const limits = getTempLimits(age, day.getMonth() + 1);
+      alarmLow = limits.warnLow;
+      alarmHigh = limits.urgentHigh;
       const agg = await prisma.envRecord.aggregate({
         _avg: { temperature: true },
         where: {
