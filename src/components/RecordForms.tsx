@@ -43,6 +43,12 @@ function todayStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function offsetDateStr(offset: number) {
+  const d = new Date();
+  d.setDate(d.getDate() - offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function nowLocal() {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
@@ -161,6 +167,26 @@ export default function RecordForms() {
         <div>
           <label className={labelCls}>记录日期 *</label>
           <input type="date" className={inputCls} value={recordDate} onChange={(e) => setRecordDate(e.target.value)} />
+          <div className="mt-2 flex gap-1.5">
+            {[
+              { label: "今天", offset: 0 },
+              { label: "昨天", offset: 1 },
+              { label: "前天", offset: 2 },
+            ].map((q) => (
+              <button
+                key={q.offset}
+                type="button"
+                onClick={() => setRecordDate(offsetDateStr(q.offset))}
+                className={`flex-1 rounded-md border px-1 py-1.5 text-xs font-medium ${
+                  recordDate === offsetDateStr(q.offset)
+                    ? "border-green-600 bg-green-600 text-white"
+                    : "border-gray-300 bg-white text-gray-700"
+                }`}
+              >
+                {q.label}
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 
